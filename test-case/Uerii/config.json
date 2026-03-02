@@ -1,0 +1,9 @@
+[
+    {
+        "config": {
+            "name": "Uerii",
+            "vuln_contract_address": "0x418c24191ae947a78c99fdc0e45a1f96afb254be",
+            "attack_tx": "0xf4a3d0e01bbca6c114954d4a49503fc94dfdbc864bded5530b51a207640d86b5"
+        }
+    }
+]

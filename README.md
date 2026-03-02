@@ -1,2 +1,262 @@
 # PonDeReplay
-Come Mr.DJ, song pon de replay.
+
+A CLI tool to replay Ethereum transactions with patched contract bytecode. Perfect for verifying vulnerability patches by replaying historical transactions with fixed contract code.
+
+## Overview
+
+PonDeReplay allows you to:
+
+1. **Replay historical transactions** - Fetch any transaction from the blockchain
+2. **Patch contract bytecode** - Replace the vulnerable contract with your patched version
+3. **Verify patches** - Execute the transaction with the new code to confirm the fix works
+4. **Review in context** - Analyze how transactions would behave with your security patch
+
+### Use Case
+
+You have a deployed contract with a vulnerability. You've written a patch, but want to verify that:
+
+- All historical transactions would work correctly with the patch
+- The patch doesn't break existing functionality
+- The patch handles edge cases properly
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- Access to an Ethereum RPC endpoint
+
+### Setup
+
+```bash
+# Install in development mode
+pip install -e .
+
+# Or install with dev dependencies
+pip install -e ".[dev]"
+```
+
+## Configuration
+
+```bash
+export ETH_RPC_URL="https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY"
+```
+
+## Quick Start
+
+```bash
+pondereplay replay \
+  --rpc-url $ETH_RPC_URL \
+  --tx-hash 0x1234567890abcdef... \
+  --contract-address 0xAbCdEf... \
+  --bytecode-file ./patched-contract.hex
+```
+
+## Sanity Check
+
+Before trusting replay results with patched bytecode, verify the replay mechanism works correctly:
+
+```bash
+pondereplay sanity-check \
+  --rpc-url $ETH_RPC_URL \
+  --tx-hash 0x1234567890abcdef... \
+  --contract-address 0xAbCdEf... \
+  --verbose
+```
+
+This command:
+1. Fetches the **original** contract bytecode
+2. Replays the transaction with the **original** bytecode
+3. Verifies the result matches the original transaction receipt
+
+If the sanity check **fails**, something is wrong with your replay setup. If it **passes**, you can trust replays with patched bytecode.
+
+## Workflow
+
+1. **Sanity check (optional but recommended)**:
+   ```bash
+   pondereplay sanity-check \
+     --tx-hash $TX_HASH \
+     --contract-address $CONTRACT_ADDRESS \
+     --verbose
+   ```
+
+2. **Compile your patched contract** with Foundry:
+   ```bash
+   forge build
+   jq '.bytecode.object' out/MyContract.sol/MyContract.json > patched.json
+   ```
+
+3. **Find a transaction to replay** (from Etherscan, your logs, etc.)
+
+4. **Replay with the patch**:
+   ```bash
+   pondereplay replay \
+     --tx-hash $TX_HASH \
+     --contract-address $CONTRACT_ADDRESS \
+     --bytecode-file patched.json \
+     --verbose
+   ```
+
+5. **Review results** - Check if the transaction succeeds with your patch
+
+## Supported Bytecode Formats
+
+- Raw hex: `0x608060405234801561001057600080fd5b50...`
+- JSON artifacts (Foundry, Hardhat, Truffle)
+- Compiled contract JSON output
+
+## Features
+
+- ✅ Fast replay using `eth_call` with state overrides
+- ✅ Works with any Ethereum RPC provider
+- ✅ No blockchain modification
+- ✅ Supports multiple bytecode formats
+- ✅ Batch replay capability
+- ✅ Verbose debugging mode
+- ✅ Python API for integration
+
+## Documentation
+
+See full documentation in the README sections below, or use:
+
+```bash
+pondereplay --help
+pondereplay replay --help
+```
+
+## How It Works
+
+PonDeReplay uses the `eth_call` RPC method with state overrides:
+
+1. Fetch the original transaction details
+2. Use `eth_call` with `state_override` parameter to patch the contract bytecode
+3. Execute the transaction with the patched code
+4. Capture return values, logs, gas usage, and execution status
+
+This approach:
+- Doesn't require special node methods
+- Works with standard RPC providers (Alchemy, Infura, etc.)
+- Completes in a single JSON-RPC call
+- Doesn't modify blockchain state
+
+## Sanity Check (Validation)
+
+Before trusting your patched bytecode results, PonDeReplay provides a **sanity check** mechanism:
+
+```
+Original TX
+    ↓
+Fetch orig. bytecode
+    ↓
+Replay with orig. bytecode
+    ↓
+Compare with original receipt
+    ↓
+✓ If matches: Replay mechanism is working correctly
+✗ If differs: Something is wrong with your setup
+```
+
+The sanity check:
+1. Fetches the **original** contract bytecode from the blockchain
+2. Replays the transaction using **only the original bytecode** (no patch)
+3. Compares the result with the original transaction receipt
+4. Confirms the replay mechanism works
+
+**This proves your replay mechanism is correct before testing patches.** If the sanity check passes, you can trust patched bytecode results are accurate.
+
+## Advanced Usage
+
+### Python Integration
+
+```python
+from pondereplay import TransactionReplayer
+
+replayer = TransactionReplayer("https://eth-mainnet.example.com")
+
+result = replayer.replay_transaction(
+    tx_hash="0x...",
+    contract_address="0x...",
+    new_bytecode="0x...",
+    verbose=True
+)
+
+if result.success:
+    print(f"✓ Success! Return value: {result.return_value}")
+else:
+    print(f"✗ Failed: {result.error}")
+```
+
+### Sanity Check (Python API)
+
+```python
+# Validate replay mechanism works with original bytecode
+result, matches = replayer.sanity_check(
+    tx_hash="0x...",
+    contract_address="0x...",
+    verbose=True
+)
+
+if matches:
+    print("✓ Sanity check passed - replay mechanism is working!")
+else:
+    print("✗ Sanity check failed - replay output doesn't match original")
+```
+
+### Batch Replay
+
+```python
+for tx_hash in transaction_list:
+    result = replayer.replay_transaction(
+        tx_hash=tx_hash,
+        contract_address=VULNERABLE_CONTRACT,
+        new_bytecode=PATCH_BYTECODE,
+    )
+    print(f"{tx_hash}: {'✓' if result.success else '✗'}")
+```
+
+## Output Example
+
+```json
+{
+  "success": true,
+  "tx_hash": "0xabcd1234...",
+  "block_number": 17564900,
+  "return_value": "0x0000000000000000000000000000000000000000000000000000000000000001",
+  "gas_used": 50000,
+  "output": "0x0000000000000000000000000000000000000000000000000000000000000001",
+  "logs": []
+}
+```
+
+## Development
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/
+
+# Run tests with coverage
+pytest tests/ --cov=pondereplay --cov-report=html
+
+# Format code
+black pondereplay/
+
+# Lint
+flake8 pondereplay/
+
+# Type check
+mypy pondereplay/
+```
+
+See [tests/README.md](tests/README.md) for detailed testing documentation.
+
+## License
+
+MIT
+
+## Contributing
+
+Contributions welcome! Open an issue or PR for bugs, features, or improvements.
