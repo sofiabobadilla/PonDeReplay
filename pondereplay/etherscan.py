@@ -12,10 +12,15 @@ from typing import Dict, List, Optional, Sequence, Set
 
 import requests
 
-_NETWORK_TO_BASE_URL: Dict[str, str] = {
-    "mainnet": "https://api.etherscan.io",
-    "sepolia": "https://api-sepolia.etherscan.io",
-    "holesky": "https://api-holesky.etherscan.io",
+# V2 base URL is shared across all chains; the target network is selected via
+# the `chainid` query parameter.
+_ETHERSCAN_V2_BASE_URL = "https://api.etherscan.io/v2/api"
+
+# Supported network names -> chain IDs for the V2 API.
+_NETWORK_TO_CHAIN_ID: Dict[str, int] = {
+    "mainnet": 1,
+    "sepolia": 11155111,
+    "holesky": 17000,
 }
 
 
@@ -44,10 +49,13 @@ def _dedupe_preserve_order(items: Sequence[_TxRow]) -> List[str]:
 
 
 def _etherscan_api_get(
-    base_url: str, params: Dict[str, str], timeout_s: int = 30
+    chain_id: int, params: Dict[str, str], timeout_s: int = 30
 ) -> dict:
     try:
-        resp = requests.get(f"{base_url}/api", params=params, timeout=timeout_s)
+        all_params = {**params, "chainid": str(chain_id)}
+        resp = requests.get(
+            _ETHERSCAN_V2_BASE_URL, params=all_params, timeout=timeout_s
+        )
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:  # pragma: no cover (network stack specifics)
@@ -73,7 +81,7 @@ def _etherscan_api_get(
 
 def _fetch_account_txs(
     *,
-    base_url: str,
+    chain_id: int,
     api_key: str,
     address: str,
     action: str,
@@ -84,11 +92,17 @@ def _fetch_account_txs(
     rows: List[_TxRow] = []
 
     page = 1
-    offset = 10_000  # Etherscan maximum page size
+    # Etherscan enforces page * offset <= 10_000; use a conservative page size.
+    offset = 1_000
+    max_window = 10_000
+    max_pages = max_window // offset
 
     while True:
         remaining = None if limit is None else max(0, limit - len(rows))
         if remaining == 0:
+            break
+        if page > max_pages:
+            # We've reached the maximum result window that Etherscan allows.
             break
 
         params = {
@@ -105,7 +119,7 @@ def _fetch_account_txs(
         if end_block is not None:
             params["endblock"] = str(end_block)
 
-        data = _etherscan_api_get(base_url, params)
+        data = _etherscan_api_get(chain_id, params)
         result = data.get("result", [])
         if not result:
             break
@@ -157,17 +171,21 @@ def get_contract_history(
     - (Optional) Internal transactions: account/txlistinternal (deduped by hash)
     """
     network = str(network).strip().lower()
-    if network not in _NETWORK_TO_BASE_URL:
+    if network not in _NETWORK_TO_CHAIN_ID:
         raise ValueError(
             f"Unsupported etherscan network '{network}'. "
-            f"Supported: {', '.join(sorted(_NETWORK_TO_BASE_URL.keys()))}"
+            f"Supported: {', '.join(sorted(_NETWORK_TO_CHAIN_ID.keys()))}"
         )
 
-    base_url = _NETWORK_TO_BASE_URL[network]
+    chain_id = _NETWORK_TO_CHAIN_ID[network]
     address = contract_address.strip()
 
+    # Inject chain ID into all subsequent calls
+    # (mutating global params dicts would be error-prone, so we pass it via a
+    # closure parameter).
+
     txs = _fetch_account_txs(
-        base_url=base_url,
+        chain_id=chain_id,
         api_key=api_key,
         address=address,
         action="txlist",
@@ -179,7 +197,7 @@ def get_contract_history(
     internal: List[_TxRow] = []
     if include_internal:
         internal = _fetch_account_txs(
-            base_url=base_url,
+            chain_id=chain_id,
             api_key=api_key,
             address=address,
             action="txlistinternal",

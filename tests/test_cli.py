@@ -392,3 +392,54 @@ class TestCLIReplayHistory:
         )
         assert res.exit_code != 0
         assert "exactly one history source" in res.output.lower()
+
+
+class TestCLITxList:
+    @patch("pondereplay.cli.get_contract_history")
+    def test_tx_list_etherscan_json(self, mock_get_history):
+        runner = CliRunner()
+        mock_get_history.return_value = ["0x" + "1" * 64, "0x" + "2" * 64]
+
+        out_file = "txs.json"
+
+        res = runner.invoke(
+            cli,
+            [
+                "tx-list",
+                "--rpc-url",
+                "http://localhost:8545",
+                "--contract-address",
+                "0xabcd",
+                "--etherscan-api-key",
+                "k",
+                "--etherscan-network",
+                "mainnet",
+                "--output",
+                out_file,
+            ],
+        )
+
+        assert res.exit_code == 0
+        path = Path(out_file)
+        assert path.exists()
+        data = json.loads(path.read_text())
+        assert data["count"] == 2
+        assert data["tx_hashes"] == ["0x" + "1" * 64, "0x" + "2" * 64]
+
+    def test_tx_list_etherscan_requires_key(self):
+        runner = CliRunner()
+
+        res = runner.invoke(
+            cli,
+            [
+                "tx-list",
+                "--rpc-url",
+                "http://localhost:8545",
+                "--contract-address",
+                "0xabcd",
+            ],
+            env={"ETHERSCAN_API_KEY": ""},
+        )
+
+        assert res.exit_code != 0
+        assert "tx-list requires --etherscan-api-key" in res.output.lower()

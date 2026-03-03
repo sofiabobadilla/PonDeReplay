@@ -360,6 +360,137 @@ def replay_history(
         sys.exit(1)
 
 
+@cli.command("tx-list")
+@click.option(
+    "--rpc-url",
+    required=True,
+    envvar="ETH_RPC_URL",
+    help="Ethereum RPC URL (or set ETH_RPC_URL env var)",
+)
+@click.option(
+    "--contract-address",
+    required=True,
+    type=str,
+    help="Contract address (0x-prefixed)",
+)
+@click.option(
+    "--etherscan-api-key",
+    required=False,
+    envvar="ETHERSCAN_API_KEY",
+    help="Etherscan API key (or set ETHERSCAN_API_KEY)",
+)
+@click.option(
+    "--etherscan-network",
+    required=False,
+    type=click.Choice(["mainnet", "sepolia", "holesky"], case_sensitive=False),
+    default="mainnet",
+    show_default=True,
+    help="Etherscan network to query",
+)
+@click.option(
+    "--start-block",
+    type=int,
+    default=None,
+    help="Starting block for history fetch (default: explorer/provider default)",
+)
+@click.option(
+    "--end-block",
+    type=int,
+    default=None,
+    help="Ending block for history fetch (default: explorer/provider default)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of txs to write to the JSON file (default: all)",
+)
+@click.option(
+    "--output",
+    "output_path",
+    required=False,
+    type=str,
+    help="Output JSON file path (default: <contract-address>.json)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def tx_list(
+    rpc_url: str,
+    contract_address: str,
+    etherscan_api_key: Optional[str],
+    etherscan_network: str,
+    start_block: Optional[int],
+    end_block: Optional[int],
+    limit: Optional[int],
+    output_path: Optional[str],
+    verbose: bool,
+):
+    """
+    Fetch and print the transaction hashes involving a contract.
+
+    This does NOT replay transactions; it only retrieves the tx hash list and writes
+    it to a JSON file.
+    """
+    try:
+        if not etherscan_api_key:
+            raise click.UsageError(
+                "tx-list requires --etherscan-api-key (or ETHERSCAN_API_KEY in .env)"
+            )
+
+        if verbose:
+            click.echo(
+                f"🔍 Fetching tx history from Etherscan ({etherscan_network})...",
+                err=True,
+            )
+
+        # Fetch up to `limit` transactions from Etherscan. If limit is None,
+        # this will return as many as the API allows (up to its internal cap).
+        tx_hashes = get_contract_history(
+            api_key=etherscan_api_key,
+            contract_address=contract_address,
+            network=etherscan_network,
+            start_block=start_block,
+            end_block=end_block,
+            limit=limit,
+            include_internal=True,
+        )
+
+        filename = output_path or f"{contract_address}.json"
+        payload = {
+            "contract_address": contract_address,
+            "count": len(tx_hashes),
+            "tx_hashes": tx_hashes,
+            "source": "etherscan",
+            "network": etherscan_network,
+        }
+
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+        click.echo(f"Wrote {len(tx_hashes)} transactions to {filename}")
+
+        sys.exit(0)
+
+    except (EtherscanError, click.ClickException) as e:
+        click.echo(f"❌ Error: {str(e)}", err=True)
+        if verbose:
+            import traceback
+
+            traceback.print_exc()
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Error: {str(e)}", err=True)
+        if verbose:
+            import traceback
+
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.command()
 @click.option(
     "--rpc-url",
