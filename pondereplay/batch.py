@@ -1,6 +1,7 @@
 """
 Batch replay operations for multiple transactions
 """
+
 from typing import List, Dict, Any, Optional
 from web3 import Web3
 from .replayer import TransactionReplayer, ReplayResult
@@ -8,13 +9,13 @@ from .replayer import TransactionReplayer, ReplayResult
 
 class BatchReplayer:
     """Replay multiple transactions and generate comparison reports"""
-    
+
     def __init__(self, rpc_url: str):
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
         if not self.w3.is_connected():
             raise ConnectionError(f"Cannot connect to RPC: {rpc_url}")
         self.replayer = TransactionReplayer(rpc_url)
-    
+
     def get_transactions_to_address(
         self,
         address: str,
@@ -24,50 +25,59 @@ class BatchReplayer:
     ) -> List[str]:
         """
         Scan blockchain for all transactions to an address.
-        
+
         Note: This scans blocks manually, which is slow for large ranges.
         For production use, consider using Etherscan API or an indexing service.
-        
+
         Args:
             address: Contract/account address (0x-prefixed)
             start_block: Block to start scanning from
             end_block: Block to end scanning (defaults to latest)
             verbose: Enable verbose logging
-        
+
         Returns:
             List of transaction hashes
         """
         address = Web3.to_checksum_address(address)
-        
+
         if end_block is None:
             end_block = self.w3.eth.block_number
-        
+
         if verbose:
-            print(f"[*] Scanning blocks {start_block} to {end_block} for txs to {address}...")
-        
+            print(
+                f"[*] Scanning blocks {start_block} to {end_block} for txs to {address}..."
+            )
+
         tx_hashes = []
-        
+
         for block_num in range(start_block, end_block + 1):
             try:
                 block = self.w3.eth.get_block(block_num)
-                for tx_hash in block.get('transactions', []):
+                for tx_hash in block.get("transactions", []):
                     try:
                         tx = self.w3.eth.get_transaction(tx_hash)
-                        if tx.get('to') and Web3.to_checksum_address(tx['to']) == address:
-                            tx_hashes.append(tx_hash.hex() if hasattr(tx_hash, 'hex') else tx_hash)
+                        if (
+                            tx.get("to")
+                            and Web3.to_checksum_address(tx["to"]) == address
+                        ):
+                            tx_hashes.append(
+                                tx_hash.hex() if hasattr(tx_hash, "hex") else tx_hash
+                            )
                     except Exception:
                         continue
             except Exception:
                 continue
-            
+
             if verbose and (block_num + 1) % 100 == 0:
-                print(f"  Scanned {block_num + 1} blocks, found {len(tx_hashes)} txs so far...")
-        
+                print(
+                    f"  Scanned {block_num + 1} blocks, found {len(tx_hashes)} txs so far..."
+                )
+
         if verbose:
             print(f"[*] Found {len(tx_hashes)} total transactions")
-        
+
         return tx_hashes
-    
+
     def replay_batch(
         self,
         tx_hashes: List[str],
@@ -77,7 +87,7 @@ class BatchReplayer:
     ) -> Dict[str, ReplayResult]:
         """
         Replay multiple transactions with patched bytecode.
-        
+
         Args:
             tx_hashes: List of transaction hashes
             contract_address: Contract address to patch
@@ -85,19 +95,19 @@ class BatchReplayer:
                 with the contract bytecode as it existed at (block_number - 1)
                 for that transaction.
             verbose: Enable verbose logging
-        
+
         Returns:
             Dict mapping tx_hash -> ReplayResult
         """
         results = {}
-        
+
         if verbose:
             print(f"[*] Starting batch replay of {len(tx_hashes)} transactions...")
-        
+
         for i, tx_hash in enumerate(tx_hashes, 1):
             if verbose:
                 print(f"[{i}/{len(tx_hashes)}] Replaying {tx_hash}...")
-            
+
             try:
                 result = self.replayer.replay_transaction(
                     tx_hash=tx_hash,
@@ -115,9 +125,9 @@ class BatchReplayer:
                     block_number=0,
                     error=str(e),
                 )
-        
+
         return results
-    
+
     def generate_report(
         self,
         results: Dict[str, ReplayResult],
@@ -126,37 +136,37 @@ class BatchReplayer:
     ) -> Dict[str, Any]:
         """
         Generate a summary report of batch replay results.
-        
+
         Args:
             results: Results dict from replay_batch
             attack_tx: Expected attack transaction hash (marked specially)
             verbose: Enable verbose logging
-        
+
         Returns:
             Summary dict with statistics and transaction details
         """
         passed = []
         failed = []
         attack_expected_fail = False
-        
-        attack_tx_lower = (attack_tx.lower() if attack_tx else None)
-        
+
+        attack_tx_lower = attack_tx.lower() if attack_tx else None
+
         for tx_hash, result in results.items():
             tx_lower = tx_hash.lower()
             is_attack = attack_tx_lower and tx_lower == attack_tx_lower
-            
+
             if result.success:
                 passed.append(tx_hash)
                 if is_attack:
                     if verbose:
-                        print(f"⚠️  Attack tx succeeded (expected to fail)")
+                        print("⚠️  Attack tx succeeded (expected to fail)")
             else:
                 failed.append(tx_hash)
                 if is_attack:
                     attack_expected_fail = True
                     if verbose:
-                        print(f"✓ Attack tx failed as expected")
-        
+                        print("✓ Attack tx failed as expected")
+
         return {
             "total": len(results),
             "passed": len(passed),
@@ -178,32 +188,36 @@ def print_batch_report(report: Dict[str, Any], attack_tx: str = None):
     print(f"Passed: {report['passed']}")
     print(f"Failed: {report['failed']}")
     print()
-    
+
     if attack_tx:
-        status = "✓ As Expected" if report['attack_tx_failed_as_expected'] else "✗ Unexpected"
+        status = (
+            "✓ As Expected"
+            if report["attack_tx_failed_as_expected"]
+            else "✗ Unexpected"
+        )
         print(f"Attack Tx Status: {status}")
         print()
-    
-    if report['failed_txs']:
+
+    if report["failed_txs"]:
         print(f"Failed Transactions ({len(report['failed_txs'])}):")
-        for tx in report['failed_txs']:
-            result = report['results'][tx]
+        for tx in report["failed_txs"]:
+            result = report["results"][tx]
             is_attack = attack_tx and tx.lower() == attack_tx.lower()
             marker = " [ATTACK]" if is_attack else ""
             print(f"  {tx}{marker}")
             if result.error:
                 print(f"    Error: {result.error}")
         print()
-    
-    if report['passed_txs']:
+
+    if report["passed_txs"]:
         print(f"Passed Transactions ({len(report['passed_txs'])}):")
-        for i, tx in enumerate(report['passed_txs'][:10], 1):  # Show first 10
+        for i, tx in enumerate(report["passed_txs"][:10], 1):  # Show first 10
             is_attack = attack_tx and tx.lower() == attack_tx.lower()
             marker = " [ATTACK]" if is_attack else ""
             print(f"  {i}. {tx}{marker}")
-        
-        if len(report['passed_txs']) > 10:
+
+        if len(report["passed_txs"]) > 10:
             print(f"  ... and {len(report['passed_txs']) - 10} more")
         print()
-    
+
     print("=" * 80)

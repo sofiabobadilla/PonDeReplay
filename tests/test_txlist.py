@@ -39,4 +39,3 @@ class TestTxListReading:
         p.write_text("0x1234\n")
         with pytest.raises(ValueError, match="Invalid tx hash"):
             read_tx_hashes_from_file(str(p))
-

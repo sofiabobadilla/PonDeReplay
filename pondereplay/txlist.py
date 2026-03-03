@@ -7,8 +7,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Iterable, List, Sequence
-
+from typing import List, Sequence
 
 _TX_HASH_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
 
@@ -68,4 +67,3 @@ def read_tx_hashes_from_file(path: str) -> List[str]:
         hashes.append(_validate_tx_hash(s))
 
     return _dedupe_preserve_order(hashes)
-
