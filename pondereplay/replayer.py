@@ -167,7 +167,7 @@ class TransactionReplayer:
         self,
         tx_hash: str,
         contract_address: str,
-        new_bytecode: str,
+        new_bytecode: Optional[str] = None,
         verbose: bool = False,
     ) -> ReplayResult:
         """
@@ -176,7 +176,8 @@ class TransactionReplayer:
         Args:
             tx_hash: Transaction hash to replay
             contract_address: Address of contract to patch
-            new_bytecode: New contract bytecode (0x-prefixed hex)
+            new_bytecode: New contract bytecode (0x-prefixed hex). If omitted,
+                the contract's original bytecode at (block_number - 1) is used.
             verbose: Enable verbose logging
         
         Returns:
@@ -203,6 +204,15 @@ class TransactionReplayer:
         
         # Normalize addresses
         contract_address = Web3.to_checksum_address(contract_address)
+
+        if new_bytecode is None:
+            if verbose:
+                print(f"[*] No patched bytecode provided; using original code at block {block_number - 1}...")
+            original = self.w3.eth.get_code(
+                contract_address, block_identifier=block_number - 1
+            )
+            # HexBytes.hex() returns 0x-prefixed hex string
+            new_bytecode = original.hex()
         
         # Use web3.py to replay
         result = self._replay_with_web3(

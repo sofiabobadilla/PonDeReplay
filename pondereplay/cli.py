@@ -3,7 +3,6 @@ PonDeReplay CLI - Replay Ethereum transactions with patched contract bytecode
 """
 import json
 import sys
-from pathlib import Path
 from typing import Optional
 
 import click
@@ -11,6 +10,9 @@ from dotenv import load_dotenv
 
 from .replayer import TransactionReplayer, ReplayResult
 from .batch import BatchReplayer, print_batch_report
+from .etherscan import EtherscanError, get_contract_history
+from .txlist import read_tx_hashes_from_file
+from .utils import read_bytecode as _read_bytecode_util
 
 load_dotenv()
 
@@ -43,9 +45,15 @@ def cli():
 )
 @click.option(
     "--bytecode-file",
-    required=True,
+    required=False,
     type=click.Path(exists=True),
     help="Path to new contract bytecode (hex string or JSON artifact)",
+)
+@click.option(
+    "--bytecode-hex",
+    required=False,
+    type=str,
+    help="Patched deployed contract bytecode as a 0x-prefixed hex string",
 )
 @click.option(
     "--fork-url",
@@ -69,7 +77,8 @@ def replay(
     rpc_url: str,
     tx_hash: str,
     contract_address: str,
-    bytecode_file: str,
+    bytecode_file: Optional[str],
+    bytecode_hex: Optional[str],
     fork_url: Optional[str],
     output: str,
     verbose: bool,
@@ -88,11 +97,15 @@ def replay(
         if verbose:
             click.echo("🔧 Initializing PonDeReplay...", err=True)
         
-        # Read bytecode
-        bytecode = _read_bytecode(bytecode_file)
+        bytecode = _resolve_bytecode_override(
+            bytecode_file=bytecode_file, bytecode_hex=bytecode_hex
+        )
         
         if verbose:
-            click.echo(f"✓ Bytecode loaded ({len(bytecode) // 2} bytes)", err=True)
+            if bytecode is None:
+                click.echo("✓ No patched bytecode provided (using original bytecode)", err=True)
+            else:
+                click.echo(f"✓ Bytecode loaded ({len(bytecode) // 2} bytes)", err=True)
         
         # Create replayer
         fork_url = fork_url or rpc_url
@@ -125,6 +138,204 @@ def replay(
         click.echo(f"❌ Error: {str(e)}", err=True)
         if verbose:
             import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command("replay-history")
+@click.option(
+    "--rpc-url",
+    required=True,
+    envvar="ETH_RPC_URL",
+    help="Ethereum RPC URL (or set ETH_RPC_URL env var)",
+)
+@click.option(
+    "--contract-address",
+    required=True,
+    type=str,
+    help="Contract address to patch (0x-prefixed)",
+)
+@click.option(
+    "--etherscan-api-key",
+    required=False,
+    envvar="ETHERSCAN_API_KEY",
+    help="Etherscan API key (or set ETHERSCAN_API_KEY)",
+)
+@click.option(
+    "--etherscan-network",
+    required=False,
+    type=click.Choice(["mainnet", "sepolia", "holesky"], case_sensitive=False),
+    default="mainnet",
+    show_default=True,
+    help="Etherscan network to query",
+)
+@click.option(
+    "--tx-list-file",
+    required=False,
+    type=click.Path(exists=True),
+    help="Path to a file containing tx hashes (one per line) or JSON list",
+)
+@click.option(
+    "--start-block",
+    type=int,
+    default=None,
+    help="Starting block for history fetch (default: explorer/provider default)",
+)
+@click.option(
+    "--end-block",
+    type=int,
+    default=None,
+    help="Ending block for history fetch (default: explorer/provider default)",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of txs to replay",
+)
+@click.option(
+    "--bytecode-file",
+    required=False,
+    type=click.Path(exists=True),
+    help="Path to patched contract bytecode (hex string or JSON artifact)",
+)
+@click.option(
+    "--bytecode-hex",
+    required=False,
+    type=str,
+    help="Patched deployed contract bytecode as a 0x-prefixed hex string",
+)
+@click.option(
+    "--attack-tx",
+    type=str,
+    default=None,
+    help="Expected attack transaction hash (0x-prefixed, for reporting)",
+)
+@click.option(
+    "--output",
+    type=click.Choice(["json", "text"]),
+    default="text",
+    help="Output format",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Enable verbose output",
+)
+def replay_history(
+    rpc_url: str,
+    contract_address: str,
+    etherscan_api_key: Optional[str],
+    etherscan_network: str,
+    tx_list_file: Optional[str],
+    start_block: Optional[int],
+    end_block: Optional[int],
+    limit: Optional[int],
+    bytecode_file: Optional[str],
+    bytecode_hex: Optional[str],
+    attack_tx: Optional[str],
+    output: str,
+    verbose: bool,
+):
+    """
+    Replay a contract's historical transactions with patched bytecode.
+
+    Each transaction is replayed against the chain state at (block_number - 1),
+    i.e. the block immediately before the original transaction.
+    """
+    try:
+        if verbose:
+            click.echo("🔧 Initializing history replay...", err=True)
+
+        if bool(etherscan_api_key) == bool(tx_list_file):
+            raise click.UsageError(
+                "Provide exactly one history source: --etherscan-api-key or --tx-list-file"
+            )
+
+        bytecode = _resolve_bytecode_override(
+            bytecode_file=bytecode_file, bytecode_hex=bytecode_hex
+        )
+
+        if verbose:
+            if bytecode is None:
+                click.echo(
+                    "✓ No patched bytecode provided (using original bytecode per-tx)",
+                    err=True,
+                )
+            else:
+                click.echo(
+                    f"✓ Bytecode loaded ({len(bytecode) // 2} bytes)", err=True
+                )
+
+        if etherscan_api_key:
+            if verbose:
+                click.echo(
+                    f"🔍 Fetching transaction history from Etherscan ({etherscan_network})...",
+                    err=True,
+                )
+            tx_hashes = get_contract_history(
+                api_key=etherscan_api_key,
+                contract_address=contract_address,
+                network=etherscan_network,
+                start_block=start_block,
+                end_block=end_block,
+                limit=limit,
+                include_internal=True,
+            )
+        else:
+            if verbose:
+                click.echo(f"📄 Reading tx hashes from {tx_list_file}...", err=True)
+            tx_hashes = read_tx_hashes_from_file(tx_list_file)  # type: ignore[arg-type]
+            if limit is not None:
+                tx_hashes = tx_hashes[:limit]
+
+        if not tx_hashes:
+            click.echo("No transactions found for the requested history source/range.")
+            sys.exit(0)
+
+        if verbose:
+            click.echo(f"✓ Found {len(tx_hashes)} transactions", err=True)
+            click.echo(f"🎬 Replaying {len(tx_hashes)} transactions...", err=True)
+
+        batch = BatchReplayer(rpc_url)
+        results = batch.replay_batch(
+            tx_hashes=tx_hashes,
+            contract_address=contract_address,
+            new_bytecode=bytecode,
+            verbose=verbose,
+        )
+        report = batch.generate_report(results, attack_tx=attack_tx, verbose=verbose)
+
+        if output == "json":
+            output_data = {
+                "total": report["total"],
+                "passed": report["passed"],
+                "failed": report["failed"],
+                "attack_tx_failed_as_expected": report.get(
+                    "attack_tx_failed_as_expected", False
+                ),
+                "passed_txs": report["passed_txs"],
+                "failed_txs": report["failed_txs"],
+            }
+            click.echo(json.dumps(output_data, indent=2))
+        else:
+            print_batch_report(report, attack_tx=attack_tx)
+
+        sys.exit(0)
+
+    except (EtherscanError, click.ClickException) as e:
+        click.echo(f"❌ Error: {str(e)}", err=True)
+        if verbose:
+            import traceback
+
+            traceback.print_exc()
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Error: {str(e)}", err=True)
+        if verbose:
+            import traceback
+
             traceback.print_exc()
         sys.exit(1)
 
@@ -269,6 +480,12 @@ def sanity_check(
     help="Path to patched contract bytecode",
 )
 @click.option(
+    "--bytecode-hex",
+    required=False,
+    type=str,
+    help="Patched deployed contract bytecode as a 0x-prefixed hex string",
+)
+@click.option(
     "--start-block",
     type=int,
     default=0,
@@ -302,6 +519,7 @@ def batch_replay(
     rpc_url: str,
     contract_address: str,
     bytecode_file: str,
+    bytecode_hex: Optional[str],
     start_block: int,
     end_block: int,
     attack_tx: str,
@@ -320,8 +538,13 @@ def batch_replay(
         if verbose:
             click.echo("🔧 Initializing batch replayer...", err=True)
         
-        # Read patched bytecode
-        bytecode = _read_bytecode(bytecode_file)
+        bytecode = _resolve_bytecode_override(
+            bytecode_file=bytecode_file, bytecode_hex=bytecode_hex
+        )
+        if bytecode is None:
+            raise click.UsageError(
+                "batch-replay requires patched bytecode via --bytecode-file or --bytecode-hex"
+            )
         if verbose:
             click.echo(f"✓ Bytecode loaded ({len(bytecode) // 2} bytes)", err=True)
         
@@ -390,50 +613,30 @@ def batch_replay(
 
 
 def _read_bytecode(bytecode_file: str) -> str:
-    """Read bytecode from file (hex, JSON artifact, or raw binary .bin)"""
-    path = Path(bytecode_file)
-    
-    if not path.exists():
-        raise FileNotFoundError(f"Bytecode file not found: {bytecode_file}")
-    
-    raw = path.read_bytes()
-    
-    # First try UTF-8 text (hex string or JSON artifact)
-    try:
-        content = raw.decode("utf-8").strip()
-    except UnicodeDecodeError:
-        # Raw binary bytecode, convert directly to hex string
-        return "0x" + raw.hex()
-    
-    # Try to parse as JSON (Solidity artifact)
-    try:
-        artifact = json.loads(content)
-        if isinstance(artifact, dict):
-            # Try common artifact paths
-            if "bytecode" in artifact:
-                bytecode = artifact["bytecode"]
-            elif "evm" in artifact and "bytecode" in artifact["evm"]:
-                bytecode = artifact["evm"]["bytecode"]["object"]
-            elif "deployedBytecode" in artifact:
-                bytecode = artifact["deployedBytecode"]
-            else:
-                raise ValueError("Could not find bytecode in JSON artifact")
-            
-            if isinstance(bytecode, dict) and "object" in bytecode:
-                bytecode = bytecode["object"]
-            
-            # Ensure it's a hex string
-            bytecode = str(bytecode).strip()
-            if not bytecode.startswith("0x"):
-                bytecode = "0x" + bytecode.lstrip("0x")
-            return bytecode
-    except json.JSONDecodeError:
-        pass
-    
-    # Try as raw hex text
-    if content.startswith("0x"):
-        return content
-    return "0x" + content
+    """
+    Backwards-compatible wrapper for CLI/tests.
+
+    Prefer using `pondereplay.utils.read_bytecode` directly.
+    """
+    return _read_bytecode_util(bytecode_file)
+
+
+def _resolve_bytecode_override(
+    *, bytecode_file: Optional[str], bytecode_hex: Optional[str]
+) -> Optional[str]:
+    if bytecode_file and bytecode_hex:
+        raise click.UsageError("Provide only one of --bytecode-file or --bytecode-hex")
+
+    if bytecode_file:
+        return _read_bytecode(bytecode_file)
+
+    if bytecode_hex:
+        h = bytecode_hex.strip()
+        if not h.startswith("0x"):
+            raise click.UsageError("--bytecode-hex must be 0x-prefixed deployed bytecode")
+        return h
+
+    return None
 
 
 def _print_text_output(result: ReplayResult):
