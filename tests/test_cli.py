@@ -288,3 +288,80 @@ class TestCLITextOutput:
         assert "Success: True" in result.output
         assert "Block Number: 12345" in result.output
         assert "Gas Used: 50000" in result.output
+
+
+class TestCLIReplayHistory:
+    """Test CLI replay-history command"""
+
+    @patch("pondereplay.cli.BatchReplayer")
+    def test_replay_history_from_tx_list_file(self, mock_batch_class, tmp_path):
+        runner = CliRunner()
+
+        txs_file = tmp_path / "txs.txt"
+        txs_file.write_text("0x" + "1" * 64 + "\n" + "0x" + "2" * 64 + "\n")
+
+        mock_batch = Mock()
+        mock_batch.replay_batch.return_value = {
+            "0x" + "1" * 64: ReplayResult(success=True, tx_hash="0x" + "1" * 64, block_number=1),
+            "0x" + "2" * 64: ReplayResult(success=False, tx_hash="0x" + "2" * 64, block_number=2, error="reverted"),
+        }
+        mock_batch.generate_report.return_value = {
+            "total": 2,
+            "passed": 1,
+            "failed": 1,
+            "passed_txs": ["0x" + "1" * 64],
+            "failed_txs": ["0x" + "2" * 64],
+            "attack_tx_failed_as_expected": False,
+            "results": mock_batch.replay_batch.return_value,
+        }
+        mock_batch_class.return_value = mock_batch
+
+        res = runner.invoke(
+            cli,
+            [
+                "replay-history",
+                "--rpc-url",
+                "http://localhost:8545",
+                "--contract-address",
+                "0xabcd",
+                "--tx-list-file",
+                str(txs_file),
+                "--bytecode-hex",
+                "0x" + "6" * 10,
+                "--output",
+                "json",
+            ],
+        )
+
+        assert res.exit_code == 0
+        out = json.loads(res.output)
+        assert out["total"] == 2
+        assert out["passed"] == 1
+        assert out["failed"] == 1
+        mock_batch.replay_batch.assert_called_once()
+
+    def test_replay_history_requires_exactly_one_source(self, tmp_path):
+        runner = CliRunner()
+
+        txs_file = tmp_path / "txs.txt"
+        txs_file.write_text("0x" + "1" * 64 + "\n")
+
+        # both provided => error
+        res = runner.invoke(
+            cli,
+            [
+                "replay-history",
+                "--rpc-url",
+                "http://localhost:8545",
+                "--contract-address",
+                "0xabcd",
+                "--tx-list-file",
+                str(txs_file),
+                "--etherscan-api-key",
+                "k",
+                "--bytecode-hex",
+                "0x" + "6" * 10,
+            ],
+        )
+        assert res.exit_code != 0
+        assert "exactly one history source" in res.output.lower()

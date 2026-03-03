@@ -42,7 +42,7 @@ pip install -e ".[dev]"
 export ETH_RPC_URL="https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY"
 ```
 
-## Quick Start
+## Quick Start (single transaction)
 
 ```bash
 pondereplay replay \
@@ -51,6 +51,12 @@ pondereplay replay \
   --contract-address 0xAbCdEf... \
   --bytecode-file ./patched-contract.hex
 ```
+
+> **Pre-transaction state:** by default, all replays execute on the state at block \\(N-1\\),
+> i.e. the block immediately before the original transaction's block \\(N\\).
+
+You can also omit `--bytecode-file` / `--bytecode-hex` to replay using the **original**
+on-chain bytecode at block \\(N-1\\). This is equivalent to a sanity-style replay.
 
 ## Sanity Check
 
@@ -99,6 +105,44 @@ If the sanity check **fails**, something is wrong with your replay setup. If it 
    ```
 
 5. **Review results** - Check if the transaction succeeds with your patch
+
+## History Replay (all transactions)
+
+PonDeReplay can also replay a **full history of transactions** for a vulnerable contract.
+Each transaction is executed independently on the state at block \\(N-1\\) for that tx,
+with optional patched bytecode applied.
+
+### From Etherscan (mainnet/testnets)
+
+```bash
+pondereplay replay-history \
+  --rpc-url $ETH_RPC_URL \
+  --contract-address $CONTRACT \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --etherscan-network sepolia \
+  --bytecode-file patched.json \
+  --attack-tx 0xATTACKTX... \
+  --verbose
+```
+
+### From an explicit tx list file
+
+```bash
+pondereplay replay-history \
+  --rpc-url $ETH_RPC_URL \
+  --contract-address $CONTRACT \
+  --tx-list-file txs.txt \
+  --bytecode-file patched.json \
+  --verbose
+```
+
+Where `txs.txt` contains either:
+
+- One tx hash per line (blank lines and `#` comments ignored), or
+- JSON: `["0x...", "0x...", ...]` or `{"tx_hashes": ["0x...", ...]}`
+
+If you omit `--bytecode-file` / `--bytecode-hex`, `replay-history` will use the
+**original** contract bytecode for each transaction at its own block \\(N-1\\).
 
 ## Supported Bytecode Formats
 

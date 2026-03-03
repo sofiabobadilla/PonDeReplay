@@ -1,7 +1,7 @@
 """
 Batch replay operations for multiple transactions
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from web3 import Web3
 from .replayer import TransactionReplayer, ReplayResult
 
@@ -72,7 +72,7 @@ class BatchReplayer:
         self,
         tx_hashes: List[str],
         contract_address: str,
-        new_bytecode: str,
+        new_bytecode: Optional[str] = None,
         verbose: bool = False,
     ) -> Dict[str, ReplayResult]:
         """
@@ -81,7 +81,9 @@ class BatchReplayer:
         Args:
             tx_hashes: List of transaction hashes
             contract_address: Contract address to patch
-            new_bytecode: New bytecode
+            new_bytecode: New bytecode. If omitted, each transaction is replayed
+                with the contract bytecode as it existed at (block_number - 1)
+                for that transaction.
             verbose: Enable verbose logging
         
         Returns:
