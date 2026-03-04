@@ -144,6 +144,44 @@ Where `txs.txt` contains either:
 If you omit `--bytecode-file` / `--bytecode-hex`, `replay-history` will use the
 **original** contract bytecode for each transaction at its own block \\(N-1\\).
 
+## Transaction list export (`tx-list`)
+
+Sometimes you want to **inspect or select transactions first**, before replaying.
+`tx-list` fetches the transaction history for a contract from Etherscan and writes
+it to a JSON file.
+
+```bash
+pondereplay tx-list \
+  --rpc-url $ETH_RPC_URL \
+  --contract-address 0xCONTRACT \
+  --etherscan-api-key $ETHERSCAN_API_KEY \
+  --etherscan-network mainnet \
+  --start-block 0 \
+  --end-block latest \
+  --limit 100 \
+  --output contract-txs.json
+```
+
+Notes:
+
+- **Output file**:
+  - If you omit `--output`, the file is named `<contract-address>.json`
+    (for example `0x418c24191ae947a78c99fdc0e45a1f96afb254be.json`).
+  - If you pass `--output path.json`, it writes there instead.
+- **Limiting results**:
+  - `--limit N` returns only the first `N` transactions (oldest-first ordering).
+  - If you omit `--limit`, the command returns as many transactions as Etherscan
+    allows for that address (subject to API caps).
+- **JSON structure**:
+  - `contract_address`: the address you queried
+  - `count`: number of hashes included in `tx_hashes`
+  - `tx_hashes`: array of transaction hashes as 0x-prefixed strings
+  - `source`: `"etherscan"`
+  - `network`: `"mainnet"`, `"sepolia"`, or `"holesky"`
+
+You can then feed hashes from this JSON into `pondereplay replay` or
+`pondereplay replay-history` (via a small script or a `tx-list-file`).
+
 ## Supported Bytecode Formats
 
 - Raw hex: `0x608060405234801561001057600080fd5b50...`
@@ -286,12 +324,9 @@ pytest tests/
 pytest tests/ --cov=pondereplay --cov-report=html
 
 # Format code
-black pondereplay/
+black pondereplay/ tests/
 
-# Lint
-flake8 pondereplay/
-
-# Type check
+# Type check (optional)
 mypy pondereplay/
 ```
 
